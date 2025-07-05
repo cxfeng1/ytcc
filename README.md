@@ -129,4 +129,33 @@ MIT License - see LICENSE file for details.
 ## Acknowledgments
 
 - Built on top of the excellent [yt-dlp](https://github.com/yt-dlp/yt-dlp) project
-- Inspired by the need for a simple, reliable YouTube transcript extraction tool 
+- Inspired by the need for a simple, reliable YouTube transcript extraction tool
+
+## Handling Rate Limiting (429 Errors)
+
+YouTube sometimes blocks requests with "429 Too Many Requests" errors. ytcc v16.3 includes advanced handling for this:
+
+### Automatic Protection Features
+- **Retry mechanism**: Automatically retries up to 3 times with exponential backoff
+- **Built-in delays**: Adds 1-3 second delays between requests
+- **Fallback mode**: Uses minimal options if standard mode fails
+
+### If You Still Get 429 Errors
+1. **Wait 10-15 minutes** before trying again
+2. **Use a VPN** to change your IP address
+3. **Check the video** - ensure it has auto-generated English subtitles
+4. **Try during off-peak hours** when YouTube servers are less busy
+
+### Error Messages Explained
+- `Rate limited (429 error)` - YouTube is temporarily blocking your IP
+- `Trying fallback mode` - Using minimal options to bypass restrictions
+- `Fallback mode: Success!` - Successfully retrieved subtitles with basic method
+
+## Examples
+
+```bash
+# Extract subtitles from a YouTube video
+ytcc "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+# The transcript will be automatically copied to your clipboard
+``` 
