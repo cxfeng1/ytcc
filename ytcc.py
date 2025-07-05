@@ -10,6 +10,7 @@ import os
 import glob
 import time
 import random
+from urllib.parse import urlparse, parse_qs
 
 def find_yt_dlp():
     """Checks if yt-dlp is installed and accessible in the system's PATH."""
@@ -19,6 +20,74 @@ def find_yt_dlp():
         print("Please install it to use this script. See: https://github.com/yt-dlp/yt-dlp", file=sys.stderr)
         sys.exit(1)
     return path
+
+def extract_video_id(url):
+    """Extract video ID from YouTube URL for better file matching."""
+    try:
+        parsed = urlparse(url)
+        if 'youtube.com' in parsed.netloc:
+            if 'watch' in parsed.path:
+                return parse_qs(parsed.query).get('v', [None])[0]
+            elif 'embed' in parsed.path:
+                return parsed.path.split('/')[-1]
+        elif 'youtu.be' in parsed.netloc:       
+            return parsed.path.lstrip('/')
+    except:
+        pass
+    return None
+
+def select_best_subtitle_file(srt_files, video_url):
+    """
+    Intelligently select the best subtitle file from multiple options.
+    Priority: exact video match > shortest filename > user selection
+    """
+    if len(srt_files) == 1:
+        return srt_files[0]
+    
+    print(f"-> Found {len(srt_files)} subtitle files:")
+    for i, file in enumerate(srt_files, 1):
+        print(f"   {i}. {file}")
+    
+    # Try to match by video ID first
+    video_id = extract_video_id(video_url)
+    if video_id:
+        for file in srt_files:
+            if video_id in file:
+                print(f"-> Auto-selected (video ID match): {file}")
+                return file
+    
+    # If auto mode is enabled, select shortest filename
+    if AUTO_SELECT_MODE:
+        selected = min(srt_files, key=len)
+        print(f"-> Auto-selected (shortest name): {selected}")
+        return selected
+    
+    # Interactive selection for multiple files
+    print("\n-> Multiple subtitle files found. Please choose:")
+    for i, file in enumerate(srt_files, 1):
+        print(f"   {i}. {file}")
+    
+    while True:
+        try:
+            choice = input(f"-> Enter number (1-{len(srt_files)}) or press Enter for auto-select: ").strip()
+            if not choice:
+                # Auto-select: prefer shorter filenames (usually more specific)
+                selected = min(srt_files, key=len)
+                print(f"-> Auto-selected (shortest name): {selected}")
+                return selected
+            
+            choice_num = int(choice)
+            if 1 <= choice_num <= len(srt_files):
+                selected = srt_files[choice_num - 1]
+                print(f"-> Selected: {selected}")
+                return selected
+            else:
+                print(f"-> Please enter a number between 1 and {len(srt_files)}")
+        except ValueError:
+            print("-> Please enter a valid number")
+        except KeyboardInterrupt:
+            print("\n-> Cancelled by user")
+            return None
 
 def parse_srt(srt_content):
     """
@@ -46,7 +115,7 @@ def parse_srt(srt_content):
 
 def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
     """
-    V16.2: Enhanced with retry mechanism and rate limiting to handle 429 errors.
+    V16.4: Enhanced with intelligent subtitle file selection for multiple files.
     """
     print("--- Downloading auto-generated English subtitles... ---")
     
@@ -82,23 +151,36 @@ def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
                 print("-> No subtitle file was created. The video might not have auto-generated English subtitles.", file=sys.stderr)
                 return None
             
-            # Use the first matching file
-            srt_file = srt_files[0]
-            print(f"-> Found subtitle file: {srt_file}")
+            # Intelligently select the best subtitle file
+            selected_file = select_best_subtitle_file(srt_files, video_url)
+            if not selected_file:
+                print("-> No subtitle file selected.", file=sys.stderr)
+                return None
+            
+            print(f"-> Processing subtitle file: {selected_file}")
             
             # Read and parse the SRT content
-            with open(srt_file, 'r', encoding='utf-8') as f:
+            with open(selected_file, 'r', encoding='utf-8') as f:
                 srt_content = f.read()
-            
-            # Clean up the temporary file
-            os.remove(srt_file)
-            print(f"-> Cleaned up temporary file: {srt_file}")
             
             if not srt_content.strip():
                 print("-> Subtitle file was empty.", file=sys.stderr)
                 return None
             
             transcript = parse_srt(srt_content)
+            
+            # Clean up ALL subtitle files (not just the selected one)
+            cleaned_files = []
+            for srt_file in srt_files:
+                try:
+                    os.remove(srt_file)
+                    cleaned_files.append(srt_file)
+                except:
+                    pass
+            
+            if cleaned_files:
+                print(f"-> Cleaned up {len(cleaned_files)} subtitle file(s)")
+            
             if transcript:
                 print("-> Subtitle successfully downloaded and parsed.")
                 return transcript
@@ -132,7 +214,8 @@ def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
             return None
         finally:
             # Clean up any remaining .srt files in case of errors
-            for srt_file in glob.glob('*.en*.srt'):
+            remaining_files = glob.glob('*.en*.srt')
+            for srt_file in remaining_files:
                 try:
                     os.remove(srt_file)
                     print(f"-> Cleaned up remaining file: {srt_file}")
@@ -244,13 +327,20 @@ def parse_vtt(vtt_content):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ytcc v16.3: A streamlined tool to extract YouTube auto-generated subtitles to clipboard (with advanced rate limiting protection and fallback mode).",
+        description="ytcc v16.4: A streamlined tool to extract YouTube auto-generated subtitles to clipboard (with intelligent subtitle file selection).",
         epilog="Example: ytcc https://www.youtube.com/watch?v=VIDEO_ID"
     )
     parser.add_argument("url", help="YouTube video URL (no quotes needed)")
+    parser.add_argument("--auto", "-a", action="store_true", 
+                       help="Auto-select subtitle file without user interaction")
     args = parser.parse_args()
 
     yt_dlp_path = find_yt_dlp()
+    
+    # Set global auto mode for subtitle selection
+    global AUTO_SELECT_MODE
+    AUTO_SELECT_MODE = args.auto
+    
     transcript = get_transcript_with_yt_dlp(args.url, yt_dlp_path)
 
     if transcript:
@@ -265,6 +355,9 @@ def main():
     else:
         print("\n❌ Failed to extract transcript. Please check the video URL and try again.", file=sys.stderr)
         sys.exit(1)
+
+# Global variable for auto-select mode
+AUTO_SELECT_MODE = False
 
 if __name__ == "__main__":
     main()

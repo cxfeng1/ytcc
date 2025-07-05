@@ -46,20 +46,49 @@ A streamlined command-line tool to extract YouTube auto-generated subtitles and 
 
 ## Usage
 
-Simply run `ytcc` followed by any YouTube URL:
-
 ```bash
-ytcc https://www.youtube.com/watch?v=VIDEO_ID
+# Using the script directly
+python3 ytcc.py "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# If you created the symlink
+ytcc "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# Auto-select subtitle file without user interaction
+ytcc --auto "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
-### Examples
+## Smart Subtitle Selection
 
+When multiple subtitle files are found, ytcc v16.4 uses intelligent selection:
+
+### Selection Priority
+1. **Video ID Match**: Files containing the video ID are preferred
+2. **Shortest Filename**: Usually indicates more specific content
+3. **User Choice**: Interactive selection when not in auto mode
+
+### Auto Mode (`--auto` or `-a`)
+- Automatically selects the best subtitle file without user interaction
+- Perfect for scripting and batch processing
+- Uses intelligent heuristics to choose the most relevant file
+
+### Interactive Mode (default)
+- Shows all available subtitle files
+- Allows manual selection by number
+- Press Enter for automatic selection based on filename length
+
+### Example with Multiple Files
 ```bash
-# Extract subtitles from a YouTube video
-ytcc https://www.youtube.com/watch?v=dQw4w9WgXcQ
+# Interactive selection
+ytcc "https://www.youtube.com/watch?v=VIDEO_ID"
+-> Found 3 subtitle files:
+   1. Long Video Title Here.en.srt
+   2. Video.en.srt  
+   3. Another Video Title.en.srt
+-> Enter number (1-3) or press Enter for auto-select: 2
 
-# Works with any YouTube URL format
-ytcc https://youtu.be/dQw4w9WgXcQ
+# Auto mode
+ytcc --auto "https://www.youtube.com/watch?v=VIDEO_ID"
+-> Auto-selected (shortest name): Video.en.srt
 ```
 
 The tool will:
@@ -113,6 +142,9 @@ This project evolved from a complex browser extension to a simple, reliable comm
 
 ### Version History
 
+- **v16.4**: Added intelligent subtitle file selection and auto mode
+- **v16.3**: Added advanced rate limiting protection and fallback mode
+- **v16.2**: Enhanced retry mechanism with exponential backoff
 - **v16.1**: Added deduplication logic to prevent repeated sentences
 - **v16.0**: Complete rewrite using file-based approach with SRT format
 - **v15.0**: Focused on auto-generated subtitles only
