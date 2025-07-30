@@ -36,6 +36,20 @@ def extract_video_id(url):
         pass
     return None
 
+def check_if_playlist_url(url):
+    """检查URL是否包含播放列表参数，并返回相关信息"""
+    try:
+        parsed = urlparse(url)
+        query_params = parse_qs(parsed.query)
+        
+        if 'list' in query_params:
+            list_id = query_params['list'][0]
+            video_id = query_params.get('v', [None])[0]
+            return True, list_id, video_id
+        return False, None, None
+    except:
+        return False, None, None
+
 def select_best_subtitle_file(srt_files, video_url):
     """
     Intelligently select the best subtitle file from multiple options.
@@ -115,9 +129,18 @@ def parse_srt(srt_content):
 
 def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
     """
-    V16.4: Enhanced with intelligent subtitle file selection for multiple files.
+    V16.5: Enhanced with playlist detection and single video download.
     """
     print("--- Downloading auto-generated English subtitles... ---")
+    
+    # 检查是否为播放列表URL
+    is_playlist, list_id, video_id = check_if_playlist_url(video_url)
+    if is_playlist:
+        print(f"-> 检测到播放列表URL (list={list_id})")
+        if video_id:
+            print(f"-> 将只下载当前视频的字幕 (video={video_id})，不会下载整个播放列表")
+        else:
+            print("-> 将只下载播放列表中第一个视频的字幕，不会下载整个播放列表")
     
     # More conservative approach to avoid rate limiting
     command = [
@@ -130,8 +153,13 @@ def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
         '--sleep-interval', '1',  # Add sleep between requests
         '--max-sleep-interval', '3',  # Random sleep up to 3 seconds
         '--retries', '3',  # Built-in retry mechanism
-        video_url
     ]
+    
+    # 如果是播放列表URL，添加 --no-playlist 参数确保只下载单个视频
+    if is_playlist:
+        command.append('--no-playlist')
+    
+    command.append(video_url)
     
     for attempt in range(max_retries):
         try:
@@ -230,6 +258,9 @@ def try_fallback_mode(video_url, yt_dlp_path):
     """
     print("-> Attempting fallback mode with minimal options...")
     
+    # 检查是否为播放列表URL
+    is_playlist, list_id, video_id = check_if_playlist_url(video_url)
+    
     # Ultra-minimal command
     command = [
         yt_dlp_path,
@@ -237,8 +268,14 @@ def try_fallback_mode(video_url, yt_dlp_path):
         '--write-auto-subs',
         '--sub-langs', 'en',
         '--output', 'fallback.%(ext)s',
-        video_url
     ]
+    
+    # 如果是播放列表URL，添加 --no-playlist 参数
+    if is_playlist:
+        command.append('--no-playlist')
+        print("-> 回退模式：检测到播放列表，只下载单个视频")
+    
+    command.append(video_url)
     
     try:
         # Wait a bit more before fallback
@@ -327,8 +364,8 @@ def parse_vtt(vtt_content):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ytcc v16.4: A streamlined tool to extract YouTube auto-generated subtitles to clipboard (with intelligent subtitle file selection).",
-        epilog="Example: ytcc https://www.youtube.com/watch?v=VIDEO_ID"
+        description="ytcc v16.5: A streamlined tool to extract YouTube auto-generated subtitles to clipboard (with intelligent subtitle file selection and playlist handling).",
+        epilog="Example: ytcc https://www.youtube.com/watch?v=VIDEO_ID or ytcc https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID"
     )
     parser.add_argument("url", help="YouTube video URL (no quotes needed)")
     parser.add_argument("--auto", "-a", action="store_true", 
