@@ -39,15 +39,20 @@ def extract_video_id(url):
 def check_if_playlist_url(url):
     """检查URL是否包含播放列表参数，并返回相关信息"""
     try:
+        verbose_print(f"解析URL: {url}")
         parsed = urlparse(url)
         query_params = parse_qs(parsed.query)
+        verbose_print(f"解析后的查询参数: {query_params}")
         
         if 'list' in query_params:
             list_id = query_params['list'][0]
             video_id = query_params.get('v', [None])[0]
+            verbose_print(f"检测到播放列表 - list_id: {list_id}, video_id: {video_id}")
             return True, list_id, video_id
+        verbose_print("未检测到播放列表参数")
         return False, None, None
-    except:
+    except Exception as e:
+        verbose_print(f"URL解析出错: {e}")
         return False, None, None
 
 def select_best_subtitle_file(srt_files, video_url):
@@ -129,9 +134,10 @@ def parse_srt(srt_content):
 
 def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
     """
-    V16.5: Enhanced with playlist detection and single video download.
+    V16.6: Enhanced with playlist detection, single video download, and verbose logging.
     """
     print("--- Downloading auto-generated English subtitles... ---")
+    verbose_print(f"开始下载流程，最大重试次数: {max_retries}")
     
     # 检查是否为播放列表URL
     is_playlist, list_id, video_id = check_if_playlist_url(video_url)
@@ -158,83 +164,107 @@ def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
     # 如果是播放列表URL，添加 --no-playlist 参数确保只下载单个视频
     if is_playlist:
         command.append('--no-playlist')
+        verbose_print("添加 --no-playlist 参数")
     
     command.append(video_url)
+    verbose_print(f"构建的yt-dlp命令: {' '.join(command)}")
     
     for attempt in range(max_retries):
         try:
+            verbose_print(f"开始第 {attempt + 1} 次尝试")
             if attempt > 0:
                 # Exponential backoff with jitter
                 delay = (2 ** attempt) + random.uniform(0, 2)
                 print(f"-> Retrying in {delay:.1f} seconds... (Attempt {attempt + 1}/{max_retries})")
+                verbose_print(f"等待 {delay:.1f} 秒后重试")
                 time.sleep(delay)
             
             print(f"-> Running command: {' '.join(command)}")
+            verbose_print("执行yt-dlp命令...")
             result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+            verbose_print(f"命令执行成功，返回码: {result.returncode}")
+            verbose_print(f"stdout长度: {len(result.stdout)}, stderr长度: {len(result.stderr)}")
             
             # yt-dlp should have created an .srt file in the current directory
             # Find the generated subtitle file
             srt_files = glob.glob('*.en*.srt')
+            verbose_print(f"搜索字幕文件，找到 {len(srt_files)} 个: {srt_files}")
             if not srt_files:
                 print("-> No subtitle file was created. The video might not have auto-generated English subtitles.", file=sys.stderr)
                 return None
             
             # Intelligently select the best subtitle file
+            verbose_print("开始智能选择字幕文件...")
             selected_file = select_best_subtitle_file(srt_files, video_url)
             if not selected_file:
                 print("-> No subtitle file selected.", file=sys.stderr)
                 return None
             
             print(f"-> Processing subtitle file: {selected_file}")
+            verbose_print(f"选定的字幕文件: {selected_file}")
             
             # Read and parse the SRT content
+            verbose_print("读取字幕文件内容...")
             with open(selected_file, 'r', encoding='utf-8') as f:
                 srt_content = f.read()
             
+            verbose_print(f"字幕文件大小: {len(srt_content)} 字符")
             if not srt_content.strip():
                 print("-> Subtitle file was empty.", file=sys.stderr)
                 return None
             
+            verbose_print("解析SRT内容...")
             transcript = parse_srt(srt_content)
+            verbose_print(f"解析后的转录文本长度: {len(transcript) if transcript else 0} 字符")
             
             # Clean up ALL subtitle files (not just the selected one)
+            verbose_print("开始清理字幕文件...")
             cleaned_files = []
             for srt_file in srt_files:
                 try:
                     os.remove(srt_file)
                     cleaned_files.append(srt_file)
-                except:
-                    pass
+                    verbose_print(f"已删除文件: {srt_file}")
+                except Exception as clean_error:
+                    verbose_print(f"删除文件失败 {srt_file}: {clean_error}")
             
             if cleaned_files:
                 print(f"-> Cleaned up {len(cleaned_files)} subtitle file(s)")
             
             if transcript:
                 print("-> Subtitle successfully downloaded and parsed.")
+                verbose_print("字幕下载和解析成功完成")
                 return transcript
             else:
                 print("-> Failed to extract text from subtitle file.", file=sys.stderr)
+                verbose_print("从字幕文件提取文本失败")
                 return None
 
         except subprocess.CalledProcessError as e:
             error_message = e.stderr.lower() if e.stderr else ""
+            verbose_print(f"subprocess.CalledProcessError: 返回码={e.returncode}")
+            verbose_print(f"错误信息: {e.stderr}")
             
             # Check if it's a 429 error (rate limiting)
             if "429" in error_message or "too many requests" in error_message:
                 print(f"-> Rate limited (429 error) on attempt {attempt + 1}/{max_retries}", file=sys.stderr)
+                verbose_print("检测到429限制错误")
                 if attempt < max_retries - 1:
                     continue  # Retry
                 else:
                     print("\n--- Trying fallback mode ---", file=sys.stderr)
+                    verbose_print("尝试使用回退模式")
                     return try_fallback_mode(video_url, yt_dlp_path)
             else:
                 # Other errors
                 print(f"\n--- ERROR: 'yt-dlp' failed (attempt {attempt + 1}/{max_retries}) ---", file=sys.stderr)
                 print(f"-> Exit Code: {e.returncode}", file=sys.stderr)
                 print(f"-> Error Message:\n{e.stderr}", file=sys.stderr)
+                verbose_print(f"其他错误，尝试次数: {attempt + 1}/{max_retries}")
                 if attempt < max_retries - 1:
                     continue  # Retry for other errors too
                 else:
+                    verbose_print("达到最大重试次数，返回None")
                     return None
                     
         except Exception as e:
@@ -257,6 +287,7 @@ def try_fallback_mode(video_url, yt_dlp_path):
     Fallback mode with minimal options to avoid rate limiting.
     """
     print("-> Attempting fallback mode with minimal options...")
+    verbose_print("进入回退模式")
     
     # 检查是否为播放列表URL
     is_playlist, list_id, video_id = check_if_playlist_url(video_url)
@@ -274,48 +305,66 @@ def try_fallback_mode(video_url, yt_dlp_path):
     if is_playlist:
         command.append('--no-playlist')
         print("-> 回退模式：检测到播放列表，只下载单个视频")
+        verbose_print("回退模式添加 --no-playlist 参数")
     
     command.append(video_url)
+    verbose_print(f"回退模式命令: {' '.join(command)}")
     
     try:
         # Wait a bit more before fallback
+        verbose_print("回退模式等待5秒...")
         time.sleep(5)
         print(f"-> Running fallback command: {' '.join(command)}")
+        verbose_print("执行回退模式命令...")
         result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        verbose_print(f"回退模式命令执行成功，返回码: {result.returncode}")
         
         # Look for any subtitle file
         subtitle_files = glob.glob('fallback.*.vtt') + glob.glob('fallback.*.srt')
+        verbose_print(f"回退模式搜索到 {len(subtitle_files)} 个字幕文件: {subtitle_files}")
         if not subtitle_files:
             print("-> Fallback mode: No subtitle file created.", file=sys.stderr)
+            verbose_print("回退模式：未找到字幕文件")
             return None
         
         subtitle_file = subtitle_files[0]
         print(f"-> Fallback mode: Found subtitle file: {subtitle_file}")
+        verbose_print(f"回退模式选择文件: {subtitle_file}")
         
         # Read the content
+        verbose_print("回退模式读取文件内容...")
         with open(subtitle_file, 'r', encoding='utf-8') as f:
             content = f.read()
+        verbose_print(f"回退模式文件大小: {len(content)} 字符")
         
         # Clean up
         os.remove(subtitle_file)
         print(f"-> Cleaned up fallback file: {subtitle_file}")
+        verbose_print(f"清理回退文件: {subtitle_file}")
         
         if not content.strip():
             print("-> Fallback mode: Subtitle file was empty.", file=sys.stderr)
+            verbose_print("回退模式：字幕文件为空")
             return None
         
         # Parse based on file type
+        verbose_print(f"回退模式解析文件类型: {subtitle_file}")
         if subtitle_file.endswith('.srt'):
             transcript = parse_srt(content)
+            verbose_print("使用SRT解析器")
         else:
             # Basic VTT parsing
             transcript = parse_vtt(content)
+            verbose_print("使用VTT解析器")
         
+        verbose_print(f"回退模式解析结果长度: {len(transcript) if transcript else 0}")
         if transcript:
             print("-> Fallback mode: Success!")
+            verbose_print("回退模式成功完成")
             return transcript
         else:
             print("-> Fallback mode: Failed to parse subtitle content.", file=sys.stderr)
+            verbose_print("回退模式：解析字幕内容失败")
             return None
             
     except subprocess.CalledProcessError as e:
@@ -364,37 +413,58 @@ def parse_vtt(vtt_content):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ytcc v16.5: A streamlined tool to extract YouTube auto-generated subtitles to clipboard (with intelligent subtitle file selection and playlist handling).",
-        epilog="Example: ytcc https://www.youtube.com/watch?v=VIDEO_ID or ytcc https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID"
+        description="ytcc v16.6: A streamlined tool to extract YouTube auto-generated subtitles to clipboard (with intelligent subtitle file selection, playlist handling, and verbose logging).",
+        epilog="Example: ytcc https://www.youtube.com/watch?v=VIDEO_ID or ytcc --verbose --auto https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID"
     )
     parser.add_argument("url", help="YouTube video URL (no quotes needed)")
     parser.add_argument("--auto", "-a", action="store_true", 
                        help="Auto-select subtitle file without user interaction")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                       help="Enable verbose output for debugging")
     args = parser.parse_args()
 
     yt_dlp_path = find_yt_dlp()
     
-    # Set global auto mode for subtitle selection
-    global AUTO_SELECT_MODE
+    # Set global modes
+    global AUTO_SELECT_MODE, VERBOSE_MODE
     AUTO_SELECT_MODE = args.auto
+    VERBOSE_MODE = args.verbose
     
+    if VERBOSE_MODE:
+        print("[VERBOSE] 详细日志模式已启用")
+        print(f"[VERBOSE] yt-dlp 路径: {yt_dlp_path}")
+        print(f"[VERBOSE] 输入URL: {args.url}")
+        print(f"[VERBOSE] 自动选择模式: {args.auto}")
+    
+    verbose_print("开始获取转录文本...")
     transcript = get_transcript_with_yt_dlp(args.url, yt_dlp_path)
 
     if transcript:
+        verbose_print("成功获取转录文本")
         print("\n✅ --- FINAL TRANSCRIPT --- ✅\n")
         print(transcript)
         print("\n--------------------------\n")
+        verbose_print("尝试复制到剪贴板...")
         try:
             pyperclip.copy(transcript)
             print("Success: Transcript has been copied to the clipboard.")
-        except pyperclip.PyperclipException:
+            verbose_print("成功复制到剪贴板")
+        except pyperclip.PyperclipException as e:
             print(f"Warning: Could not copy to clipboard.", file=sys.stderr)
+            verbose_print(f"复制到剪贴板失败: {e}")
     else:
+        verbose_print("获取转录文本失败")
         print("\n❌ Failed to extract transcript. Please check the video URL and try again.", file=sys.stderr)
         sys.exit(1)
 
-# Global variable for auto-select mode
+# Global variables
 AUTO_SELECT_MODE = False
+VERBOSE_MODE = False
+
+def verbose_print(*args, **kwargs):
+    """打印详细日志信息，仅在 verbose 模式下输出"""
+    if VERBOSE_MODE:
+        print("[VERBOSE]", *args, **kwargs)
 
 if __name__ == "__main__":
     main()
