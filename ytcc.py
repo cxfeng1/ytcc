@@ -134,7 +134,7 @@ def parse_srt(srt_content):
 
 def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
     """
-    V16.6: Enhanced with playlist detection, single video download, and verbose logging.
+    V16.7: Enhanced with playlist detection, single video download, verbose logging, and network optimization.
     """
     print("--- Downloading auto-generated English subtitles... ---")
     verbose_print(f"开始下载流程，最大重试次数: {max_retries}")
@@ -148,7 +148,7 @@ def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
         else:
             print("-> 将只下载播放列表中第一个视频的字幕，不会下载整个播放列表")
     
-    # More conservative approach to avoid rate limiting
+    # More conservative approach to avoid rate limiting with network optimization
     command = [
         yt_dlp_path,
         '--skip-download',
@@ -158,7 +158,10 @@ def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
         '--output', '%(title)s.%(ext)s',
         '--sleep-interval', '1',  # Add sleep between requests
         '--max-sleep-interval', '3',  # Random sleep up to 3 seconds
-        '--retries', '3',  # Built-in retry mechanism
+        '--retries', '5',  # 增加重试次数
+        '--socket-timeout', '60',  # 增加socket超时时间到60秒
+        '--fragment-retries', '10',  # 片段重试次数
+        '--retry-sleep', '5',  # 重试间隔时间
     ]
     
     # 如果是播放列表URL，添加 --no-playlist 参数确保只下载单个视频
@@ -181,9 +184,25 @@ def get_transcript_with_yt_dlp(video_url, yt_dlp_path, max_retries=3):
             
             print(f"-> Running command: {' '.join(command)}")
             verbose_print("执行yt-dlp命令...")
-            result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
-            verbose_print(f"命令执行成功，返回码: {result.returncode}")
-            verbose_print(f"stdout长度: {len(result.stdout)}, stderr长度: {len(result.stderr)}")
+            verbose_print("如果长时间无响应，请尝试 Ctrl+C 中断")
+            
+            # 添加超时机制，防止无限等待
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, 
+                                      check=True, encoding='utf-8', timeout=120)  # 2分钟超时
+                verbose_print(f"命令执行成功，返回码: {result.returncode}")
+                verbose_print(f"stdout长度: {len(result.stdout)}, stderr长度: {len(result.stderr)}")
+                if VERBOSE_MODE and result.stdout:
+                    verbose_print(f"yt-dlp输出摘要: {result.stdout[:200]}...")
+                if VERBOSE_MODE and result.stderr:
+                    verbose_print(f"yt-dlp错误信息: {result.stderr[:200]}...")
+            except subprocess.TimeoutExpired:
+                print("-> 命令执行超时 (2分钟)，可能的原因：", file=sys.stderr)
+                print("   1. 网络连接慢或不稳定", file=sys.stderr)
+                print("   2. 视频可能没有可用的字幕", file=sys.stderr)
+                print("   3. YouTube限制了访问", file=sys.stderr)
+                verbose_print("yt-dlp命令执行超时")
+                continue  # 继续重试
             
             # yt-dlp should have created an .srt file in the current directory
             # Find the generated subtitle file
@@ -292,13 +311,16 @@ def try_fallback_mode(video_url, yt_dlp_path):
     # 检查是否为播放列表URL
     is_playlist, list_id, video_id = check_if_playlist_url(video_url)
     
-    # Ultra-minimal command
+    # Ultra-minimal command with network optimization
     command = [
         yt_dlp_path,
         '--skip-download',
         '--write-auto-subs',
         '--sub-langs', 'en',
         '--output', 'fallback.%(ext)s',
+        '--socket-timeout', '60',  # 增加超时时间
+        '--retries', '3',  # 重试机制
+        '--retry-sleep', '5',  # 重试间隔
     ]
     
     # 如果是播放列表URL，添加 --no-playlist 参数
@@ -316,8 +338,19 @@ def try_fallback_mode(video_url, yt_dlp_path):
         time.sleep(5)
         print(f"-> Running fallback command: {' '.join(command)}")
         verbose_print("执行回退模式命令...")
-        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
-        verbose_print(f"回退模式命令执行成功，返回码: {result.returncode}")
+        verbose_print("回退模式也有2分钟超时限制")
+        
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, 
+                                  check=True, encoding='utf-8', timeout=120)  # 2分钟超时
+            verbose_print(f"回退模式命令执行成功，返回码: {result.returncode}")
+        except subprocess.TimeoutExpired:
+            print("-> 回退模式也超时了，建议：", file=sys.stderr)
+            print("   1. 检查网络连接", file=sys.stderr)
+            print("   2. 稍后再试", file=sys.stderr)
+            print("   3. 尝试不同的视频", file=sys.stderr)
+            verbose_print("回退模式命令执行超时")
+            return None
         
         # Look for any subtitle file
         subtitle_files = glob.glob('fallback.*.vtt') + glob.glob('fallback.*.srt')
@@ -413,14 +446,16 @@ def parse_vtt(vtt_content):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ytcc v16.6: A streamlined tool to extract YouTube auto-generated subtitles to clipboard (with intelligent subtitle file selection, playlist handling, and verbose logging).",
-        epilog="Example: ytcc https://www.youtube.com/watch?v=VIDEO_ID or ytcc --verbose --auto https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID"
+        description="ytcc v16.7: A streamlined tool to extract YouTube auto-generated subtitles to clipboard (with intelligent subtitle file selection, playlist handling, verbose logging, and network optimization).",
+        epilog="Example: ytcc https://www.youtube.com/watch?v=VIDEO_ID or ytcc --test-connection --verbose --auto https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID"
     )
     parser.add_argument("url", help="YouTube video URL (no quotes needed)")
     parser.add_argument("--auto", "-a", action="store_true", 
                        help="Auto-select subtitle file without user interaction")
     parser.add_argument("--verbose", "-v", action="store_true",
                        help="Enable verbose output for debugging")
+    parser.add_argument("--test-connection", "-t", action="store_true",
+                       help="Test network connection to YouTube before downloading")
     args = parser.parse_args()
 
     yt_dlp_path = find_yt_dlp()
@@ -435,6 +470,20 @@ def main():
         print(f"[VERBOSE] yt-dlp 路径: {yt_dlp_path}")
         print(f"[VERBOSE] 输入URL: {args.url}")
         print(f"[VERBOSE] 自动选择模式: {args.auto}")
+        print(f"[VERBOSE] 连接测试模式: {args.test_connection}")
+    
+    # 如果启用了连接测试或verbose模式，先测试网络连接
+    if args.test_connection or VERBOSE_MODE:
+        if not test_youtube_connection(yt_dlp_path):
+            if args.test_connection:
+                print("\n💡 建议的解决方案：")
+                print("1. 检查网络连接是否正常")
+                print("2. 尝试使用VPN或更换网络")
+                print("3. 稍后再试（可能是临时的网络问题）")
+                print("4. 更新yt-dlp: pip install --upgrade yt-dlp")
+                sys.exit(1)
+            else:
+                print("⚠️  网络连接有问题，但将继续尝试下载...")
     
     verbose_print("开始获取转录文本...")
     transcript = get_transcript_with_yt_dlp(args.url, yt_dlp_path)
@@ -465,6 +514,42 @@ def verbose_print(*args, **kwargs):
     """打印详细日志信息，仅在 verbose 模式下输出"""
     if VERBOSE_MODE:
         print("[VERBOSE]", *args, **kwargs)
+
+def test_youtube_connection(yt_dlp_path):
+    """测试到YouTube的网络连接"""
+    print("🔗 测试网络连接到YouTube...")
+    
+    test_command = [
+        yt_dlp_path,
+        '--list-formats',
+        '--socket-timeout', '30',
+        'https://www.youtube.com/watch?v=jNQXAC9IVRw'  # YouTube官方测试视频
+    ]
+    
+    try:
+        verbose_print(f"测试命令: {' '.join(test_command)}")
+        result = subprocess.run(test_command, capture_output=True, text=True, 
+                              timeout=45, encoding='utf-8')
+        
+        if result.returncode == 0:
+            print("✅ 网络连接正常")
+            verbose_print("YouTube连接测试成功")
+            return True
+        else:
+            print("❌ 网络连接有问题")
+            print(f"错误信息: {result.stderr[:200]}")
+            verbose_print(f"连接测试失败，返回码: {result.returncode}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print("❌ 网络连接超时")
+        print("建议检查网络连接或稍后再试")
+        verbose_print("YouTube连接测试超时")
+        return False
+    except Exception as e:
+        print(f"❌ 连接测试出错: {e}")
+        verbose_print(f"连接测试异常: {e}")
+        return False
 
 if __name__ == "__main__":
     main()
